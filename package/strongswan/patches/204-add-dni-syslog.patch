@@ -1,0 +1,61 @@
+Index: strongswan-5.0.0/src/charon/charon.c
+===================================================================
+--- strongswan-5.0.0.orig/src/charon/charon.c
++++ strongswan-5.0.0/src/charon/charon.c
+@@ -81,6 +81,20 @@ static void dbg_stderr(debug_t group, le
+ 	}
+ }
+ 
++/*
++ * syslog for dni system
++ */
++static void dni_syslog(char *fmt, ...)
++{
++    va_list args;
++    char buffer[8192] = {0};
++    
++    va_start(args, fmt);
++    vsnprintf(buffer, sizeof(buffer), fmt, args);
++    syslog(LOG_INFO, "[IPSec VPN] %s", buffer);
++    va_end(args);
++}
++
+ /**
+  * Run the daemon and handle unix signals
+  */
+@@ -417,6 +431,9 @@ static void initialize_loggers(bool use_
+ 		charon->sys_loggers->insert_last(charon->sys_loggers, sys_logger);
+ 		charon->bus->add_logger(charon->bus, &sys_logger->logger);
+ 	}
++
++    /* dni syslog */
++    charon->bus->dni_log = dni_syslog;
+ }
+ 
+ /**
+Index: strongswan-5.0.0/src/libcharon/bus/bus.h
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/bus/bus.h
++++ strongswan-5.0.0/src/libcharon/bus/bus.h
+@@ -46,6 +46,9 @@ typedef struct bus_t bus_t;
+ # define DEBUG_LEVEL 4
+ #endif /* DEBUG_LEVEL */
+ 
++/* dni syslogd */
++#define DNI_LOG(format, ...) charon->bus->dni_log(format, ##__VA_ARGS__)
++
+ #if DEBUG_LEVEL >= 0
+ #define DBG0(group, format, ...) charon->bus->log(charon->bus, group, 0, format, ##__VA_ARGS__)
+ #endif /* DEBUG_LEVEL >= 0 */
+@@ -206,6 +209,11 @@ struct bus_t {
+ 	 */
+ 	void (*log)(bus_t *this, debug_t group, level_t level, char* format, ...);
+ 
++    /*
++     * log for dni syslogd
++     */
++    void (*dni_log)(char *format, ...);
++
+ 	/**
+ 	 * Send a log message to the bus using va_list arguments.
+ 	 *

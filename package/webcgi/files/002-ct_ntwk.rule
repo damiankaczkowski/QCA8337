@@ -1,0 +1,140 @@
+#!/bin/sh
+
+IPTB="/usr/sbin/iptables"
+CONFIG="/bin/config"
+
+IP_NET=""
+LAN_NUM=
+WAN_NUM=
+
+WAN_IF=""
+WAN_PROTO=""
+
+WAN_PROTO=$($CONFIG get wan_proto)
+if [ "$WAN_PROTO" = "dhcp" -o "$WAN_PROTO" = "static" ]; then
+	WAN_IF="brwan"
+else
+	WAN_IF="ppp0"
+fi
+
+ip_mask_net() # 1.ip, 2.mask
+{
+	local ip1 ip2 ip3 ip4
+	local mask1 mask2 mask3 mask4
+	local net1 net2 net3 net4
+
+	ip1=$(echo $1 | awk -F "." '{print $1}')
+	ip2=$(echo $1 | awk -F "." '{print $2}')
+	ip3=$(echo $1 | awk -F "." '{print $3}')
+	ip4=$(echo $1 | awk -F "." '{print $4}')
+
+	mask1=$(echo $2 | awk -F "." '{print $1}')
+	mask2=$(echo $2 | awk -F "." '{print $2}')
+	mask3=$(echo $2 | awk -F "." '{print $3}')
+	mask4=$(echo $2 | awk -F "." '{print $4}')
+
+	net1=$(($ip1&$mask1))
+	net2=$(($ip2&$mask2))
+	net3=$(($ip3&$mask3))
+	net4=$(($ip4&$mask4))
+
+	IP_NET="$net1.$net2.$net3.$net4"
+}
+
+start_lan_firewall()  # 1.lanif, 2.ipaddr, 3.mask
+{
+	local lanif=$1
+	local rule_line
+	
+	ip_mask_net $2 $3
+	# PREROUTING
+	
+	# POSTROUTING
+	$IPTB -t nat -A ${WAN_IF}_masq -s $IP_NET/$3 -j MASQUERADE
+	
+	# INPUT
+	rule_line=$(iptables -t filter -L INPUT -n --line-number | grep br0_in | awk '{print $1}')
+	rule_line=$((rule_line + 1))
+	$IPTB -t filter -N ${lanif}_in
+	$IPTB -t filter -I INPUT $rule_line -i $lanif -j ${lanif}_in
+	$IPTB -t filter -A ${lanif}_in -p icmp --icmp-type 8 -j ACCEPT
+	$IPTB -t filter -A ${lanif}_in -j loc2fw
+
+	# OUTPUT
+	rule_line=$(iptables -t filter -L OUTPUT -vn --line-number | grep br0 | awk '{print $1}')
+	rule_line=$((rule_line + 1))
+	$IPTB -t filter -I OUTPUT -o $lanif -j fw2loc
+	
+	# FORWARD
+	rule_line=$(iptables -t filter -L FORWARD -n --line-number | grep br0_fwd | awk '{print $1}')
+	rule_line=$((rule_line + 1))           
+	$IPTB -t filter -N ${lanif}_fwd
+	$IPTB -t filter -I FORWARD $rule_line -i $lanif -j ${lanif}_fwd
+	$IPTB -t filter -A ${lanif}_fwd -o $WAN_IF -j loc2net
+	$IPTB -t filter -I loc2net 5 -i $lanif -j ACCEPT
+	$IPTB -t filter -A ${lanif}_fwd -o $lanif -j loc2loc
+	$IPTB -t filter -A ${WAN_IF}_fwd -o $lanif -j net2loc
+	
+	echo "$lanif Firewall Started."
+	echo ""
+}
+
+stop_lan_firewall() # 1.lanif, 2.ipaddr, 3.mask
+{
+	local lanif=$1
+	
+	ip_mask_net $2 $3
+
+	# PREROUTING
+		
+	# POSTROUTING
+	iptables -t nat -D ${WAN_IF}_masq -s $IP_NET/$3 -j MASQUERADE
+	
+	# INPUT
+	$IPTB -t filter -D INPUT -i ${lanif} -j ${lanif}_in
+	$IPTB -t filter -F ${lanif}_in
+	$IPTB -t filter -X ${lanif}_in
+	
+	# OUTPUT
+	$IPTB -t filter -D OUTPUT -o ${lanif} -j fw2loc
+	
+	# FORWARD
+	$IPTB -t filter -D loc2net -i $lanif -j ACCEPT
+	$IPTB -t filter -D ${WAN_IF}_fwd -o $lanif -j net2loc
+	$IPTB -t filter -D FORWARD -i $lanif -j ${lanif}_fwd
+	$IPTB -t filter -F ${lanif}_fwd
+	$IPTB -t filter -X ${lanif}_fwd
+	
+	echo "$lanif Firewall Stopped."
+	echo ""
+}
+
+case $1 in
+	"start")
+		index=1
+		lan_num=$($CONFIG get lan_num)		
+		while [ $index -lt $lan_num ]
+		do
+			lanif="br$index"
+			ipaddr=$($CONFIG get ct_lan_ipaddr_x$index)
+			netmask=$($CONFIG get ct_lan_netmask_x$index)
+			start_lan_firewall $lanif $ipaddr $netmask
+			index=$((index + 1))
+		done
+		;;
+	"stop")
+		index=1
+		lan_num=$($CONFIG get lan_num)		
+		while [ $index -lt $lan_num ]
+		do
+			lanif="br$index"
+			ipaddr=$($CONFIG get ct_lan_ipaddr_x$index)
+			netmask=$($CONFIG get ct_lan_netmask_x$index)
+			stop_lan_firewall $lanif $ipaddr $netmask
+			index=$((index + 1))
+		done
+		;;
+	*)
+		echo "unknow argument!"
+		;;
+esac

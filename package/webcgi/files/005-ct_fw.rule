@@ -1,0 +1,437 @@
+#!/bin/sh
+
+# 
+# 作用，在DNI防火墙基础上实现基本的网络访问控制功能
+# 此文件必须在net-wall执行之后启动
+#
+# 对于多网口的防火墙规则，默认zone域关系如下
+#  WAN1  -----> brwan
+#  WAN2 -----> brwan1
+#  LAN1  -----> br0
+#  LAN2 ----->  br1
+#
+# VPN接口关系目前还没有准确的映射关系
+#
+
+IPTB="/usr/sbin/iptables"
+IP6TB="/usr/sbin/ip6tables"
+CONFIG="/bin/config"
+
+FW_REJECT=0
+FW_ACCEPT=1
+FW_DROP=2
+
+WAN_IF="brwan"
+WAN_PROTO=""
+
+WAN_PROTO=$($CONFIG get wan_proto)
+if [ "$WAN_PROTO" = "dhcp" -o "$WAN_PROTO" = "static" ]; then
+	WAN_IF="brwan"
+else
+	WAN_IF="ppp0"
+fi
+
+wan_usr_name()
+{
+	echo $(($1 + 1))
+}
+
+wan_vif_name()
+{
+	if [ "$WAN_PROTO" == "pppoe" ]; then
+		echo "ppp$1"
+	else
+		if [ $1 -eq 0 ]; then
+			echo "brwan"
+		else
+			echo "brwan$1"
+		fi	
+	fi
+}
+
+lan_usr_name()
+{	
+	echo $(($1 + 1))
+}
+
+lan_vif_name()
+{
+	echo "br$1"
+}
+
+name_vif_xlate()
+{
+	local vif_idx=$(echo $1 | cut -b 4-)
+
+	case $1 in
+	LAN*)
+		echo "br$(($vif_idx - 1))"
+		;;
+	WAN*)
+		if [ "$WAN_PROTO" == "pppoe" ]; then
+			if [ "$1" = "WAN" ]; then
+				echo "ppp0"
+			else
+				echo "ppp$(($vif_idx - 1))"
+			fi
+		else			
+			if [ "$1" = "WAN" ]; then
+				echo "brwan"
+			else
+				echo "brwan$(($vif_idx - 1))"
+			fi
+		fi
+		;;
+	*)
+		echo ""
+		;;
+	esac
+}
+
+action_xlate()
+{
+	case $1 in
+	0) echo "REJECT" ;;
+	1) echo "ACCEPT" ;;
+	2) echo "DROP" ;;
+	esac
+}
+
+proto_xlate()
+{
+	case $1 in
+	icmp) echo "icmp" ;;
+	udp) echo "udp" ;;
+	tcp) echo "tcp" ;;
+	tcpudp) echo "tcp udp" ;;
+	*) echo "all" ;;
+	esac
+}
+
+fw_config_get_rule()
+{
+	rule_name=$($CONFIG get ct_fw_rule_name_x$1)
+	rule_src=$($CONFIG get ct_fw_rule_src_x$1)
+	rule_src_ip=$($CONFIG get ct_fw_rule_srcip_x$1)
+	rule_src_ipr=$($CONFIG get ct_fw_rule_srcipr_x$1)
+	rule_src_mac=$($CONFIG get ct_fw_rule_srcmac_x$1)
+	rule_src_port=$($CONFIG get ct_fw_rule_srcport_x$1)
+	rule_dest=$($CONFIG get ct_fw_rule_dest_x$1)
+	rule_dest_ip=$($CONFIG get ct_fw_rule_destip_x$1)
+	rule_dest_ipr=$($CONFIG get ct_fw_rule_destipr_x$1)
+	rule_dest_port=$($CONFIG get ct_fw_rule_destport_x$1)
+	rule_proto=$($CONFIG get ct_fw_rule_proto_x$1)
+	rule_action=$($CONFIG get ct_fw_rule_action_x$1)
+	rule_family=$($CONFIG get ct_fw_rule_family_x$1)
+	rule_extra=$($CONFIG get ct_fw_rule_extra_x$1)
+}
+
+#
+# 初始化fw_rule链
+#
+init_fw_rule_chain()
+{
+	local vifs
+	local lan_num
+	local wan_num
+	local index
+		
+	# WAN 链初始化
+	wan_num=$($CONFIG get wan_num)
+	wan_num=${wan_num:=1}
+	
+	index=0
+	while [ $index -lt $wan_num ]; do
+		vifs=$(wan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -N ${vifs}_in_rule
+			$IPTB -N ${vifs}_fwd_rule
+			$IPTB -I ${vifs}_in -j ${vifs}_in_rule
+			$IPTB -I ${vifs}_fwd -j ${vifs}_fwd_rule			
+		}
+		index=$((index + 1))
+	done
+	
+	# LAN 链初始化
+	lan_num=$($CONFIG get lan_num)
+	lan_num=${lan_num:=1}
+
+	index=0
+	while [ $index -lt $lan_num ]; do
+		vifs=$(lan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -N ${vifs}_in_rule
+			$IPTB -N ${vifs}_fwd_rule
+			$IPTB -I ${vifs}_in -j ${vifs}_in_rule
+			$IPTB -I ${vifs}_fwd -j ${vifs}_fwd_rule
+		}
+		index=$((index + 1))
+	done
+	
+	echo "[Firewall Rule] Init ok."
+}
+
+#
+# 清除fw_rule链
+#
+destroy_fw_rule_chain()
+{
+	local vifs
+	local lan_num
+	local wan_num
+	local index
+		
+	# WAN 链初始化
+	wan_num=$($CONFIG get wan_num)
+	wan_num=${wan_num:=1}
+
+	index=0
+	while [ $index -lt $wan_num ]; do
+		vifs=$(wan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -F ${vifs}_in_rule
+			$IPTB -F ${vifs}_fwd_rule
+			$IPTB -D ${vifs}_in -j ${vifs}_in_rule
+			$IPTB -D ${vifs}_fwd -j ${vifs}_fwd_rule
+			$IPTB -X ${vifs}_in_rule
+			$IPTB -X ${vifs}_fwd_rule			
+		}
+		index=$((index + 1))
+	done
+	
+	# LAN 链初始化
+	lan_num=$($CONFIG get lan_num)
+	lan_num=${lan_num:=1}
+	
+	index=0
+	while [ $index -lt $lan_num ]; do
+		vifs=$(lan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -F ${vifs}_in_rule
+			$IPTB -F ${vifs}_fwd_rule
+			$IPTB -D ${vifs}_in -j ${vifs}_in_rule
+			$IPTB -D ${vifs}_fwd -j ${vifs}_fwd_rule
+			$IPTB -X ${vifs}_in_rule
+			$IPTB -X ${vifs}_fwd_rule
+		}
+		index=$((index + 1))
+	done
+	
+	echo "[Firewall Rule] Destroy ok."
+}
+
+load_default_fw_rule()
+{
+	local index
+	local lan_num
+	local vifs
+
+	lan_num=$($CONFIG get lan_num)
+	lan_num=${lan_num:=1}
+
+	index=0
+	while [ $index -lt $lan_num ]; do
+		vifs=$(lan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -t filter -A ${vifs}_fwd_rule ! -o $WAN_IF -m state --state RELATED,ESTABLISHED -j ACCEPT
+		}
+		index=$((index + 1))
+	done
+
+	$IPTB -F icmpdef
+}
+
+#
+# exp: str_rpl "1234-341234" "-" ":"
+#
+str_rpl()
+{
+	local in_str=$1
+	local pat1=$2
+	local pat2=$3
+	
+	echo $in_str >/tmp/str_rpl.tmp
+	sed -i "s/${pat1}/${pat2}/g" /tmp/str_rpl.tmp
+	
+	cat /tmp/str_rpl.tmp
+}
+
+#
+# 加载fw_rule规则
+#
+load_fw_rule_config()
+{
+	local index
+	local rule_num
+	local chain proto target
+	
+	load_default_fw_rule
+
+	rule_num=$($CONFIG get ct_fw_rule_num)
+	rule_num=${rule_num:=0}
+		
+	index=0
+	while [ $index -lt $rule_num ]; do
+				
+		fw_config_get_rule $index
+		
+		in_if=$(name_vif_xlate $rule_src)
+		out_if=$(name_vif_xlate $rule_dest)
+		
+		chain="${out_if:+_fwd_rule}"
+		chain="${chain:-_in_rule}"
+		chain="$in_if$chain"
+		 
+		proto=$(proto_xlate $rule_proto)
+		target=$(action_xlate $rule_action)
+				
+		for pr in $proto
+		do
+			rules="-p $pr"
+			
+			[ -n "$rule_src_ip" ] && {
+				rules="$rules -s $rule_src_ip"
+			}
+			
+			[ -n "$rule_src_ipr" ] && {
+				rules="$rules -m iprange --src-range $rule_src_ipr"
+			}
+		
+			[ -n "$rule_src_mac" ] && {
+				rules="$rules -m mac --mac-source $rule_src_mac"
+			}
+					
+			[ -n "$rule_src_port" ] && {
+				rules="$rules -m multiport --sport $(str_rpl $rule_src_port - :)"
+			}
+			
+			[ -n "$out_if" ] && {
+				rules="$rules -o $out_if"
+			}
+		
+			[ -n "$rule_dest_ip" ] && {
+				rules="$rules -d $rule_dest_ip"
+			}
+
+			[ -n "$rule_dest_ipr" ] && {
+				rules="$rules -m iprange --dst-range $rule_dest_ipr"
+			}
+			
+			[ -n "$rule_dest_port" ] && {
+				rules="$rules -m multiport --dport $(str_rpl $rule_dest_port - :)"
+			}
+			
+			[ -n "$rule_extra" ] && {
+				rules="$rules $rule_extra"
+			}
+		
+			if [ $rule_family -eq 0 ]; then
+				$IPTB -A $chain $rules -j $target
+			elif [ $rule_family -eq 1 ]; then
+				$IP6TB -A $chain $rules -j $target
+			else
+				echo ""
+			fi
+		done
+		
+		index=$((index + 1))
+	done
+	
+	echo "[Firewall Rule] Load ok."
+}
+
+flush_fw_rule_config()
+{
+	local vifs
+	local lan_num
+	local wan_num
+	local index
+		
+	# WAN 链初始化
+	wan_num=$($CONFIG get wan_num)
+	wan_num=${wan_num:=1}
+
+	index=0
+	while [ $index -lt $wan_num ]; do
+		vifs=$(wan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -F ${vifs}_in_rule
+			$IPTB -F ${vifs}_fwd_rule	
+		}
+		index=$((index + 1))
+	done
+	
+	# LAN 链初始化
+	lan_num=$($CONFIG get lan_num)
+	wan_num=${lan_num:=1}
+
+	index=0
+	while [ $index -lt $lan_num ]; do
+		vifs=$(lan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -F ${vifs}_in_rule
+			$IPTB -F ${vifs}_fwd_rule
+		}
+		index=$((index + 1))		
+	done
+	
+	echo "[Firewall Rule] Flush ok."
+}
+
+fw_rule_status()
+{
+	local vifs
+	local lan_num
+	local wan_num
+	local index
+		
+	# WAN 链初始化
+	wan_num=$($CONFIG get wan_num)
+	wan_num=${wan_num:=1}
+
+	index=0
+	while [ $index -lt $wan_num ]; do
+		vifs=$(wan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -L ${vifs}_in_rule -nxv
+			$IPTB -L ${vifs}_fwd_rule -nxv
+		}
+		index=$((index + 1))
+	done
+	
+	# LAN 链初始化
+	lan_num=$($CONFIG get lan_num)
+	wan_num=${lan_num:=1}
+
+	index=0
+	while [ $index -lt $lan_num ]; do
+		vifs=$(lan_vif_name $index)
+		[ -n "$vifs" ] && {
+			$IPTB -L ${vifs}_in_rule -nxv
+			$IPTB -L ${vifs}_fwd_rule -nxv
+		}
+		index=$((index + 1))		
+	done
+	
+	echo "[Firewall Rule] Status ok."	
+}
+
+case $1 in
+	"start")
+		init_fw_rule_chain
+		load_fw_rule_config 
+		;;
+	"stop")
+		destroy_fw_rule_chain
+		;;
+	"reload")
+		flush_fw_rule_config 
+		load_fw_rule_config
+		;;
+	"status")
+		fw_rule_status
+		;;
+	*)
+		echo "do nothing." 
+		;;
+esac

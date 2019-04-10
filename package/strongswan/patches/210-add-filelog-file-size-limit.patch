@@ -1,0 +1,198 @@
+Index: strongswan-5.0.0/src/charon/charon.c
+===================================================================
+--- strongswan-5.0.0.orig/src/charon/charon.c
++++ strongswan-5.0.0/src/charon/charon.c
+@@ -385,7 +385,7 @@ static void initialize_loggers(bool use_
+ 				setlinebuf(file);
+ 			}
+ 		}
+-		file_logger = file_logger_create(file,
++		file_logger = file_logger_create(file, filename,
+ 						lib->settings->get_str(lib->settings,
+ 							"charon.filelog.%s.time_format", NULL, filename),
+ 						lib->settings->get_bool(lib->settings,
+@@ -409,7 +409,7 @@ static void initialize_loggers(bool use_
+ 	if (!loggers_defined)
+ 	{
+ 		/* set up default stdout file_logger */
+-		file_logger = file_logger_create(stdout, NULL, FALSE);
++		file_logger = file_logger_create(stdout, NULL, NULL, FALSE);
+ 		charon->file_loggers->insert_last(charon->file_loggers, file_logger);
+ 		/* set up default daemon sys_logger */
+ 		sys_logger = sys_logger_create(LOG_DAEMON, FALSE);
+Index: strongswan-5.0.0/src/conftest/conftest.c
+===================================================================
+--- strongswan-5.0.0.orig/src/conftest/conftest.c
++++ strongswan-5.0.0/src/conftest/conftest.c
+@@ -390,7 +390,7 @@ static void load_loggers(file_logger_t *
+ 						section, strerror(errno));
+ 				continue;
+ 			}
+-			logger = file_logger_create(file, NULL, FALSE);
++			logger = file_logger_create(file, section, NULL, FALSE);
+ 			load_log_levels(logger, section);
+ 			charon->bus->add_listener(charon->bus, &logger->listener);
+ 			charon->file_loggers->insert_last(charon->file_loggers, logger);
+@@ -434,7 +434,7 @@ int main(int argc, char *argv[])
+ 		.creds = mem_cred_create(),
+ 	);
+ 
+-	logger = file_logger_create(stdout, NULL, FALSE);
++	logger = file_logger_create(stdout, NULL, NULL, FALSE);
+ 	logger->set_level(logger, DBG_ANY, LEVEL_CTRL);
+ 	charon->bus->add_listener(charon->bus, &logger->listener);
+ 	charon->file_loggers->insert_last(charon->file_loggers, logger);
+Index: strongswan-5.0.0/src/libcharon/bus/listeners/file_logger.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/bus/listeners/file_logger.c
++++ strongswan-5.0.0/src/libcharon/bus/listeners/file_logger.c
+@@ -17,11 +17,16 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <time.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <unistd.h>
+ 
+ #include "file_logger.h"
+ 
+ #include <threading/mutex.h>
+ 
++#define MAX_LOG_SIZE (50 * 1024)
++
+ typedef struct private_file_logger_t private_file_logger_t;
+ 
+ /**
+@@ -39,6 +44,11 @@ struct private_file_logger_t {
+ 	 */
+ 	FILE *out;
+ 
++    /**
++     * log file path
++     */
++    char *filename;
++
+ 	/**
+ 	 * Maximum level to log, for each group
+ 	 */
+@@ -60,6 +70,67 @@ struct private_file_logger_t {
+ 	mutex_t *mutex;
+ };
+ 
++void limit_log_size(FILE *out, char *file, unsigned int maxsize)
++{
++    FILE *logfp = NULL;
++    int isRegular = 0;
++    unsigned int curFileSize = 0;
++    struct stat statf;
++    int maxDelNum = 100;
++
++    logfp = out;
++
++    if (stat(file, &statf) == 0)
++    {
++        isRegular = statf.st_mode & S_IFREG;
++    }
++
++    curFileSize = statf.st_size;
++    if (isRegular && (curFileSize > maxsize))
++    {
++        FILE *fp = NULL;
++        int flag = 0;
++        char buff[256] = {0};
++        char logtmpfile[128] = {0};
++
++        sprintf(logtmpfile, "/tmp/lognew");
++        if ((fp = fopen(logtmpfile, "w")) == NULL)
++        {
++            /* open log tmp file failed! */
++            goto end;
++        }
++
++        while (fgets(buff, sizeof(buff), logfp))
++        {
++            if (flag == 1)
++            {
++                fprintf(fp, "%s", buff);
++            }
++            else 
++            {
++                maxDelNum --;
++                if (maxDelNum <= 0)
++                {
++                    flag = 1;
++                }
++            }
++        }
++
++        fclose(fp);
++        fclose(logfp);
++
++        remove(file);
++        rename(logtmpfile, file);
++        remove(logtmpfile);
++
++        return ;
++    }
++end:
++    fclose(logfp);
++
++    return ;
++}
++
+ METHOD(logger_t, log_, void,
+ 	private_file_logger_t *this, debug_t group, level_t level, int thread,
+ 	ike_sa_t* ike_sa, char *message)
+@@ -97,6 +168,18 @@ METHOD(logger_t, log_, void,
+ 	this->mutex->lock(this->mutex);
+ 	while (current)
+ 	{
++        if (this->filename)
++        {            
++            limit_log_size(this->out, this->filename, MAX_LOG_SIZE);
++
++            /* 重新打开文件 */
++            this->out = fopen(this->filename, "a+");
++            if (!this->out)
++            {
++                this->out = stderr;
++            }
++        }
++    
+ 		next = strchr(current, '\n');
+ 		if (next)
+ 		{
+@@ -153,7 +236,7 @@ METHOD(file_logger_t, destroy, void,
+ /*
+  * Described in header.
+  */
+-file_logger_t *file_logger_create(FILE *out, char *time_format, bool ike_name)
++file_logger_t *file_logger_create(FILE *out, char *filename, char *time_format, bool ike_name)
+ {
+ 	private_file_logger_t *this;
+ 
+@@ -167,6 +250,7 @@ file_logger_t *file_logger_create(FILE *
+ 			.destroy = _destroy,
+ 		},
+ 		.out = out,
++		.filename = filename,
+ 		.time_format = time_format,
+ 		.ike_name = ike_name,
+ 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
+Index: strongswan-5.0.0/src/libcharon/bus/listeners/file_logger.h
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/bus/listeners/file_logger.h
++++ strongswan-5.0.0/src/libcharon/bus/listeners/file_logger.h
+@@ -53,10 +53,11 @@ struct file_logger_t {
+  * Constructor to create a file_logger_t object.
+  *
+  * @param out			FILE to write to
++ * @param filename		logger file path
+  * @param time_format	format of timestamp prefix, as in strftime()
+  * @param ike_name		TRUE to prefix the name of the IKE_SA
+  * @return				file_logger_t object
+  */
+-file_logger_t *file_logger_create(FILE *out, char *time_format, bool ike_name);
++file_logger_t *file_logger_create(FILE *out, char *filename, char *time_format, bool ike_name);
+ 
+ #endif /** FILE_LOGGER_H_ @}*/

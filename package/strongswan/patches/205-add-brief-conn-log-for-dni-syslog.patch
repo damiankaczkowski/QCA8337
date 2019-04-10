@@ -1,0 +1,208 @@
+Index: strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/main_mode.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev1/tasks/main_mode.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/main_mode.c
+@@ -111,6 +111,12 @@ static bool establish(private_main_mode_
+ 		 this->ike_sa->get_other_host(this->ike_sa),
+ 		 this->ike_sa->get_other_id(this->ike_sa));
+ 
++	DNI_LOG("IKE_SA %s[%d] established between %H==%H",
++		 this->ike_sa->get_name(this->ike_sa),
++		 this->ike_sa->get_unique_id(this->ike_sa),
++		 this->ike_sa->get_my_host(this->ike_sa),
++		 this->ike_sa->get_other_host(this->ike_sa));
++
+ 	this->ike_sa->set_state(this->ike_sa, IKE_ESTABLISHED);
+ 	charon->bus->ike_updown(charon->bus, this->ike_sa, TRUE);
+ 
+@@ -566,6 +572,7 @@ METHOD(task_t, process_i, status_t,
+ 			if (!this->proposal)
+ 			{
+ 				DBG1(DBG_IKE, "no proposal found");
++                DNI_LOG("no proposal found");
+ 				return send_notify(this, NO_PROPOSAL_CHOSEN);
+ 			}
+ 			this->ike_sa->set_proposal(this->ike_sa, this->proposal);
+Index: strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/ike_auth.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev2/tasks/ike_auth.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/ike_auth.c
+@@ -821,6 +821,13 @@ METHOD(task_t, build_r, status_t,
+ 			 this->ike_sa->get_my_id(this->ike_sa),
+ 			 this->ike_sa->get_other_host(this->ike_sa),
+ 			 this->ike_sa->get_other_id(this->ike_sa));
++
++		DNI_LOG("IKE_SA %s[%d] established between %H==%H",
++			 this->ike_sa->get_name(this->ike_sa),
++			 this->ike_sa->get_unique_id(this->ike_sa),
++			 this->ike_sa->get_my_host(this->ike_sa),
++			 this->ike_sa->get_other_host(this->ike_sa));
++        
+ 		this->ike_sa->set_state(this->ike_sa, IKE_ESTABLISHED);
+ 		charon->bus->ike_updown(charon->bus, this->ike_sa, TRUE);
+ 		return SUCCESS;
+@@ -1021,6 +1028,13 @@ METHOD(task_t, process_i, status_t,
+ 			 this->ike_sa->get_my_id(this->ike_sa),
+ 			 this->ike_sa->get_other_host(this->ike_sa),
+ 			 this->ike_sa->get_other_id(this->ike_sa));
++
++        DNI_LOG("IKE_SA %s[%d] established between %H==%H",
++             this->ike_sa->get_name(this->ike_sa),
++             this->ike_sa->get_unique_id(this->ike_sa),
++             this->ike_sa->get_my_host(this->ike_sa),
++             this->ike_sa->get_other_host(this->ike_sa));
++             
+ 		this->ike_sa->set_state(this->ike_sa, IKE_ESTABLISHED);
+ 		charon->bus->ike_updown(charon->bus, this->ike_sa, TRUE);
+ 		return SUCCESS;
+Index: strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/quick_delete.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev1/tasks/quick_delete.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/quick_delete.c
+@@ -94,6 +94,11 @@ static bool delete_child(private_quick_d
+ 			 ntohl(child_sa->get_spi(child_sa, FALSE)),
+ 			 child_sa->get_traffic_selectors(child_sa, TRUE),
+ 			 child_sa->get_traffic_selectors(child_sa, FALSE));
++
++        DNI_LOG("closing expired CHILD_SA %s with SPIs %.8x_i %.8x_o",
++			 child_sa->get_name(child_sa),
++			 ntohl(child_sa->get_spi(child_sa, TRUE)),
++			 ntohl(child_sa->get_spi(child_sa, FALSE))); 
+ 	}
+ 	else
+ 	{
+@@ -107,6 +112,12 @@ static bool delete_child(private_quick_d
+ 			 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out,
+ 			 child_sa->get_traffic_selectors(child_sa, TRUE),
+ 			 child_sa->get_traffic_selectors(child_sa, FALSE));
++
++        DNI_LOG("closing CHILD_SA %s with SPIs "
++			 "%.8x_i (%llu bytes) %.8x_o (%llu bytes)",
++			 child_sa->get_name(child_sa),
++			 ntohl(child_sa->get_spi(child_sa, TRUE)), bytes_in,
++			 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out);
+ 	}
+ 
+ 	if (!rekeyed)
+Index: strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/quick_mode.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev1/tasks/quick_mode.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev1/tasks/quick_mode.c
+@@ -291,6 +291,14 @@ static bool install(private_quick_mode_t
+ 		 this->child_sa->get_traffic_selectors(this->child_sa, TRUE),
+ 		 this->child_sa->get_traffic_selectors(this->child_sa, FALSE));
+ 
++    DNI_LOG("CHILD_SA %s established "
++		 "with SPIs %.8x_i %.8x_o and TS %#R=== %#R",
++		 this->child_sa->get_name(this->child_sa),
++		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
++		 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)),
++		 this->child_sa->get_traffic_selectors(this->child_sa, TRUE),
++		 this->child_sa->get_traffic_selectors(this->child_sa, FALSE));
++
+ 	if (this->rekey)
+ 	{
+ 		old = this->ike_sa->get_child_sa(this->ike_sa,
+Index: strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/child_create.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev2/tasks/child_create.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/child_create.c
+@@ -1044,6 +1044,11 @@ METHOD(task_t, build_r, status_t,
+ 		 this->child_sa->get_traffic_selectors(this->child_sa, TRUE),
+ 		 this->child_sa->get_traffic_selectors(this->child_sa, FALSE));
+ 
++    DNI_LOG("CHILD_SA %s established with SPIs %.8x_i %.8x_o",
++		 this->child_sa->get_name(this->child_sa),
++		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
++		 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)));
++
+ 	if (!this->rekey)
+ 	{	/* invoke the child_up() hook if we are not rekeying */
+ 		charon->bus->child_updown(charon->bus, this->child_sa, TRUE);
+@@ -1178,6 +1183,11 @@ METHOD(task_t, process_i, status_t,
+ 			 this->child_sa->get_traffic_selectors(this->child_sa, TRUE),
+ 			 this->child_sa->get_traffic_selectors(this->child_sa, FALSE));
+ 
++		DNI_LOG("CHILD_SA %s established with SPIs %.8x_i %.8x_o",
++			 this->child_sa->get_name(this->child_sa),
++			 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
++			 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)));
++
+ 		if (!this->rekey)
+ 		{	/* invoke the child_up() hook if we are not rekeying */
+ 			charon->bus->child_updown(charon->bus, this->child_sa, TRUE);
+Index: strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/child_delete.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev2/tasks/child_delete.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/child_delete.c
+@@ -261,6 +261,11 @@ static void log_children(private_child_d
+ 				 ntohl(child_sa->get_spi(child_sa, FALSE)),
+ 				 child_sa->get_traffic_selectors(child_sa, TRUE),
+ 				 child_sa->get_traffic_selectors(child_sa, FALSE));
++
++            DNI_LOG("closing expired CHILD_SA %s with SPIs %.8x_i %.8x_o",
++                 child_sa->get_name(child_sa),
++                 ntohl(child_sa->get_spi(child_sa, TRUE)),
++                 ntohl(child_sa->get_spi(child_sa, FALSE)));
+ 		}
+ 		else
+ 		{
+@@ -274,6 +279,12 @@ static void log_children(private_child_d
+ 				 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out,
+ 				 child_sa->get_traffic_selectors(child_sa, TRUE),
+ 				 child_sa->get_traffic_selectors(child_sa, FALSE));
++
++            DNI_LOG("closing CHILD_SA %s with SPIs %.8x_i "
++				 "(%llu bytes) %.8x_o (%llu bytes)",
++				 child_sa->get_name(child_sa),
++				 ntohl(child_sa->get_spi(child_sa, TRUE)), bytes_in,
++				 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out);
+ 		}
+ 	}
+ 	enumerator->destroy(enumerator);
+Index: strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/ike_init.c
+===================================================================
+--- strongswan-5.0.0.orig/src/libcharon/sa/ikev2/tasks/ike_init.c
++++ strongswan-5.0.0/src/libcharon/sa/ikev2/tasks/ike_init.c
+@@ -230,6 +230,12 @@ METHOD(task_t, build_i, status_t,
+ 		 this->ike_sa->get_name(this->ike_sa),
+ 		 this->ike_sa->get_unique_id(this->ike_sa),
+ 		 this->ike_sa->get_other_host(this->ike_sa));
++
++    DNI_LOG("initiating IKE_SA %s[%d] to %H",
++		 this->ike_sa->get_name(this->ike_sa),
++		 this->ike_sa->get_unique_id(this->ike_sa),
++		 this->ike_sa->get_other_host(this->ike_sa));
++         
+ 	this->ike_sa->set_state(this->ike_sa, IKE_CONNECTING);
+ 
+ 	if (this->retry >= MAX_RETRIES)
+@@ -367,6 +373,8 @@ METHOD(task_t, build_r, status_t,
+ 		this->other_nonce.len == 0 || this->my_nonce.len == 0)
+ 	{
+ 		DBG1(DBG_IKE, "received proposals inacceptable");
++        DNI_LOG("received proposals inacceptable");
++        
+ 		message->add_notify(message, TRUE, NO_PROPOSAL_CHOSEN, chunk_empty);
+ 		return FAILED;
+ 	}
+@@ -383,6 +391,11 @@ METHOD(task_t, build_r, status_t,
+ 			DBG1(DBG_IKE, "DH group %N inacceptable, requesting %N",
+ 				 diffie_hellman_group_names, this->dh_group,
+ 				 diffie_hellman_group_names, group);
++
++            DNI_LOG("DH group %N inacceptable, requesting %N",
++				 diffie_hellman_group_names, this->dh_group,
++				 diffie_hellman_group_names, group);
++            
+ 			this->dh_group = group;
+ 			group = htons(group);
+ 			message->add_notify(message, FALSE, INVALID_KE_PAYLOAD,
+@@ -391,6 +404,7 @@ METHOD(task_t, build_r, status_t,
+ 		else
+ 		{
+ 			DBG1(DBG_IKE, "no acceptable proposal found");
++            DNI_LOG("no acceptable proposal found");
+ 		}
+ 		return FAILED;
+ 	}

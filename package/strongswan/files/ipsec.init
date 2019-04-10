@@ -1,0 +1,39 @@
+#!/bin/sh /etc/rc.common
+
+# generate ipsec.conf and ipsec.secret
+generate_ipsec_conf() {
+	ct_ipsec.sh start
+}
+
+clear_ipsec_conf() {
+	echo -n "" > /etc/ipsec.conf
+}
+
+fw_restart() {
+    ct_ipsec.sh fw_restart
+}
+
+start() {
+	generate_ipsec_conf
+	ipsec start
+	sleep 3
+	ipsec_monitor
+}
+
+stop() {
+	killall ipsec_monitor
+	ipsec stop
+	clear_ipsec_conf
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+    sleep 1
+    fw_restart
+}
+
+reload() {
+	ipsec update
+}

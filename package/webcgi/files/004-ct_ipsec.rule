@@ -1,0 +1,13 @@
+#!/bin/sh
+
+case $1 in
+	"start")
+		/usr/sbin/ct_ipsec.sh fw_start
+		;;
+	"stop")
+		/usr/sbin/ct_ipsec.sh fw_stop
+		;;
+	*)
+		echo "unknow argument!"
+		;;
+esac
